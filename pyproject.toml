@@ -1,0 +1,32 @@
+[tool.poetry]
+name = "analyse_post"
+version = "0.1.0"
+description = "An advanced text analysis pipeline powered by spaCy, Transformers, Qdrant."
+authors = ["Your Name <you@example.com>"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+# Narrowed Python range to avoid conflicts. 
+# Use Python 3.10 or 3.11 (both satisfy qdrant-client and newer NumPy).
+python = ">=3.10,<3.12"
+
+spacy = "^3.5"
+textstat = "^0.7.3"
+sentence-transformers = "^2.2.2"
+
+# Pin qdrant-client to a known compatible version 
+# (1.1.1 was indicated in your code/logs).
+# If you still see solver issues, try "qdrant-client = '1.5.4'" or similar.
+qdrant-client = "1.1.1"
+
+transformers = "^4.26"
+requests = "^2.28.2"
+uvloop = "^0.17.0"
+
+# Dev dependencies go in a group (newer Poetry style)
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.2"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
