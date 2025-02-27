@@ -45,8 +45,8 @@ Analyse Post is a Python-based script that performs multi-dimensional analysis o
 1. **Clone the Repository:**
 
    ```bash
-   git clone <repository_url>
-   cd <repository_directory>
+   git clone https://github.com/curate-ai-sonic/ai-cron
+   cd ai-cron
    ```
 
 2. **Install Dependencies with Poetry:**
