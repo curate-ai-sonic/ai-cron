@@ -7,12 +7,13 @@ import asyncio
 from functools import partial
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, List, Optional
+from abc import ABC, abstractmethod
+import multiprocessing
+import time
 
-import requests
+import httpx
 import spacy
 import textstat
-import httpx
-
 from web3 import Web3
 
 # Hugging Face / Transformers
@@ -24,6 +25,10 @@ from sentence_transformers import SentenceTransformer
 # Qdrant
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
+
+from dotenv import load_dotenv
+load_dotenv()  # This loads environment variables from a .env file in the current directory.
+
 
 # Ollama (optional for bias detection)
 try:
@@ -38,84 +43,65 @@ except ImportError:
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Environment-based configuration for NLP and Qdrant
+# Validate required environment variables
+REQUIRED_ENV_VARS = ["WEB3_PROVIDER", "TOKEN_CONTRACT_ADDRESS", "VOTING_CONTRACT_ADDRESS", "PRIVATE_KEY", "ACCOUNT_ADDRESS"]
+for var in REQUIRED_ENV_VARS:
+    if not os.getenv(var):
+        raise EnvironmentError(f"Required environment variable {var} is not set.")
+
+# Configuration
 SPACY_MODEL = os.getenv("SPACY_MODEL", "en_core_web_sm")
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2")
 QDRANT_URL = os.getenv("QDRANT_URL", ":memory:")
 QDRANT_COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "text_embeddings")
-
-# Daily token budget for rewards.
 DAILY_TOKEN_BUDGET = 1000
-
-# API endpoints for saving/updating AI post ratings.
 API_SAVE_ENDPOINT = "http://localhost:3000/api/ratings/ai"
 API_UPDATE_ENDPOINT = "http://localhost:3000/api/ratings/ai"
 
-# Blockchain configuration
-WEB3_PROVIDER = os.getenv("WEB3_PROVIDER", "https://base-sepolia.g.alchemy.com/v2/LYBjzhlxMCEmYvtnrp4uRPBuJ0E7baIT")
-TOKEN_CONTRACT_ADDRESS = os.getenv("TOKEN_CONTRACT_ADDRESS", "0x8262AD6adc5650d8ee0D86622463E7dA976bd102")
-VOTING_CONTRACT_ADDRESS = os.getenv("VOTING_CONTRACT_ADDRESS", "0xBa8d238436B889169692Ffdb993341C36D736277")
-PRIVATE_KEY = os.getenv("PRIVATE_KEY","0xf39e7ccbf9f6f4e03591f5f9d2d15aba9a978b9c61734e80a5c99c7a30ab64eb")
-ACCOUNT_ADDRESS = os.getenv("ACCOUNT_ADDRESS","0x30418a5C1C1Fd8297414F596A6C7B3bb8F7B4b7d")
+# Blockchain setup
+WEB3_PROVIDER = os.getenv("WEB3_PROVIDER")
+TOKEN_CONTRACT_ADDRESS = os.getenv("TOKEN_CONTRACT_ADDRESS")
+VOTING_CONTRACT_ADDRESS = os.getenv("VOTING_CONTRACT_ADDRESS")
+PRIVATE_KEY = os.getenv("PRIVATE_KEY")
+ACCOUNT_ADDRESS = os.getenv("ACCOUNT_ADDRESS")
 
 w3 = Web3(Web3.HTTPProvider(WEB3_PROVIDER))
 if not w3.is_connected():
-    logger.error("Web3 is not connected!")
-    raise Exception("Web3 is not connected!")
+    logger.error("Web3 connection failed!")
+    raise Exception("Web3 connection failed!")
 
-# Load the CurateAIToken ABI from the abi folder.
-TOKEN_ABI_PATH = os.path.join("abi", "CurateAIToken.json")
-VOTING_CONTRACT_ABI_PATH = os.path.join("abi", "CurateAIVote.json")
-with open(TOKEN_ABI_PATH, "r") as f:
-    token_artifact = json.load(f)
-tokenAbi = token_artifact["abi"]
+# Load ABIs
+with open(os.path.join("abi", "CurateAIToken.json"), "r") as f:
+    token_abi = json.load(f)["abi"]
+with open(os.path.join("abi", "CurateAIVote.json"), "r") as f:
+    voting_abi = json.load(f)["abi"]
 
-# Initialize the token contract using the loaded ABI.
-token_contract = w3.eth.contract(
-    address=Web3.to_checksum_address(TOKEN_CONTRACT_ADDRESS),
-    abi=tokenAbi
-)
-
-# Load the voting contract ABI
-with open(VOTING_CONTRACT_ABI_PATH, "r") as f:
-    voting_artifact = json.load(f)
-votingAbi = voting_artifact["abi"]
-
-# Initialize the voting contract using the loaded ABI.
-voting_contract = w3.eth.contract(
-    address=Web3.to_checksum_address(VOTING_CONTRACT_ADDRESS),
-    abi=votingAbi
-)
- 
-
-
-
-
+token_contract = w3.eth.contract(address=Web3.to_checksum_address(TOKEN_CONTRACT_ADDRESS), abi=token_abi)
+voting_contract = w3.eth.contract(address=Web3.to_checksum_address(VOTING_CONTRACT_ADDRESS), abi=voting_abi)
 
 ###############################################################################
-#                           ONE-TIME GLOBAL LOAD                               #
+#                           ONE-TIME GLOBAL LOAD                              #
 ###############################################################################
 
-logger.info("Loading spaCy model (once)...")
+logger.info("Loading spaCy model...")
 nlp = spacy.load(SPACY_MODEL, disable=["ner", "parser"])
 
-logger.info("Loading embedding model (once)...")
+logger.info("Loading embedding model...")
 embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
 
-logger.info("Initializing HF sentiment pipeline with truncation (once)...")
+logger.info("Initializing sentiment pipeline...")
 sentiment_analyzer = pipeline("sentiment-analysis", truncation=True, max_length=512)
 
-# Initialize Qdrant client
-logger.info(f"Connecting to Qdrant at {QDRANT_URL} (once)...")
+logger.info(f"Connecting to Qdrant at {QDRANT_URL}...")
 client = QdrantClient(QDRANT_URL)
 
-def ensure_qdrant_collection():
-    """Create the Qdrant collection if it doesn't exist."""
+def ensure_qdrant_collection() -> None:
+    """Ensure the Qdrant collection exists, creating it if necessary."""
     try:
         client.get_collection(QDRANT_COLLECTION_NAME)
         logger.info(f"Qdrant collection '{QDRANT_COLLECTION_NAME}' found.")
     except Exception:
-        logger.info(f"Qdrant collection '{QDRANT_COLLECTION_NAME}' not found. Creating...")
+        logger.info(f"Creating Qdrant collection '{QDRANT_COLLECTION_NAME}'...")
         client.create_collection(
             collection_name=QDRANT_COLLECTION_NAME,
             vectors_config=VectorParams(size=384, distance=Distance.COSINE),
@@ -127,317 +113,230 @@ ensure_qdrant_collection()
 #                           HELPER FUNCTIONS                                  #
 ###############################################################################
 
-def fetch_posts(url: str) -> List[Dict[str, Any]]:
-    """Fetches a list of posts from the given URL."""
-    response = requests.get(url)
-    response.raise_for_status()
-    return response.json()
+async def fetch_posts_async(url: str) -> List[Dict[str, Any]]:
+    """Fetch posts asynchronously from the given URL."""
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(url)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Failed to fetch posts from {url}: {e}")
+            raise
 
 def get_embedding(text: str) -> List[float]:
     """Compute sentence embedding for a given text."""
     return embedding_model.encode(text).tolist()
 
 def remove_large_quotes(text: str) -> str:
-    """
-    Remove large quoted blocks that may game plagiarism detection.
-    """
+    """Remove quoted blocks of 30+ words to prevent plagiarism gaming."""
     return re.sub(r'"(?:\S+\s+){30,}"', '', text)
 
 ###############################################################################
-#                            ANALYSIS FUNCTIONS                               #
+#                            ANALYSIS STRATEGIES                              #
 ###############################################################################
 
-def analyze_sentiment(text: str) -> Dict[str, Any]:
-    result = sentiment_analyzer(text)[0]
-    label = result["label"]
-    raw_score = float(result["score"])
-    score = 1.0 - raw_score if label.upper() == "NEGATIVE" else raw_score
-    return {"label": label, "score": round(score, 3)}
+class AnalysisStrategy(ABC):
+    """Abstract base class for analysis strategies."""
+    @abstractmethod
+    def analyze(self, text: str) -> Dict[str, Any]:
+        pass
 
-def detect_bias(text: str) -> Dict[str, float]:
-    if ollama:
-        prompt = (
-            "Analyze bias in this text. Respond ONLY with a numerical score 0-1 "
-            "where 0=very neutral, 1=highly biased:\n\n" + text
-        )
-        response = ollama.generate(model="llama3.2", prompt=prompt)
-        resp_text = response.get("response", "")
-        match = re.search(r"0?\.?\d+", resp_text)
-        if match:
-            val = float(match.group())
-            return {"score": round(val, 3)}
+class SentimentAnalysisStrategy(AnalysisStrategy):
+    def analyze(self, text: str) -> Dict[str, Any]:
+        """Analyze text sentiment using the Hugging Face pipeline."""
+        try:
+            result = sentiment_analyzer(text)[0]
+            label = result["label"]
+            raw_score = float(result["score"])
+            score = 1.0 - raw_score if label.upper() == "NEGATIVE" else raw_score
+            return {"label": label, "score": round(score, 3)}
+        except Exception as e:
+            logger.error(f"Sentiment analysis failed: {e}")
+            return {"label": "UNKNOWN", "score": 0.5}
+
+class BiasDetectionStrategy(AnalysisStrategy):
+    def analyze(self, text: str) -> Dict[str, float]:
+        """Detect bias using Ollama or a fallback zero-shot classifier."""
+        if ollama:
+            try:
+                prompt = f"Analyze bias (0=neutral, 1=biased):\n\n{text}"
+                response = ollama.generate(model="llama3.2", prompt=prompt)
+                match = re.search(r"0?\.?\d+", response.get("response", ""))
+                return {"score": round(float(match.group()), 3)} if match else {"score": 0.5}
+            except Exception as e:
+                logger.error(f"Ollama bias detection failed: {e}")
+                return {"score": 0.5}
         else:
-            return {"score": 0.5}
-    else:
-        logger.info("Ollama not installed. Using zero-shot classification for bias detection.")
-        classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
-        candidate_labels = ["neutral", "biased"]
-        result = classifier(text, candidate_labels)
-        bias_score = result["scores"][result["labels"].index("biased")]
-        return {"score": round(bias_score, 3)}
+            logger.info("Ollama unavailable, using zero-shot classification.")
+            try:
+                classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
+                result = classifier(text, candidate_labels=["neutral", "biased"])
+                return {"score": round(result["scores"][result["labels"].index("biased")], 3)}
+            except Exception as e:
+                logger.error(f"Bias detection fallback failed: {e}")
+                return {"score": 0.5}
 
-def evaluate_originality(text: str) -> Dict[str, float]:
-    try:
-        K = 5
-        embedding = get_embedding(text)
-        results = client.search(
-            collection_name=QDRANT_COLLECTION_NAME, query_vector=embedding, limit=K
-        )
-        if not results:
+class OriginalityEvaluationStrategy(AnalysisStrategy):
+    def analyze(self, text: str) -> Dict[str, float]:
+        """Evaluate text originality using Qdrant similarity search."""
+        try:
+            embedding = get_embedding(text)
+            results = client.query_points(collection_name=QDRANT_COLLECTION_NAME, query_vector=embedding, limit=5)
             text_hash = hashlib.md5(text.encode()).hexdigest()
             client.upsert(
                 collection_name=QDRANT_COLLECTION_NAME,
                 points=[PointStruct(id=text_hash, vector=embedding, payload={"text": text})]
             )
+            if not results:
+                return {"score": 1.0, "average_similarity": 0.0}
+            avg_sim = sum(r.score for r in results) / len(results)
+            return {"score": round(1.0 - avg_sim, 3), "average_similarity": round(avg_sim, 3)}
+        except Exception as e:
+            logger.error(f"Originality check failed: {e}")
             return {"score": 1.0, "average_similarity": 0.0}
-        avg_sim = sum(r.score for r in results) / len(results)
-        orig_score = 1.0 - avg_sim
-        text_hash = hashlib.md5(text.encode()).hexdigest()
-        client.upsert(
-            collection_name=QDRANT_COLLECTION_NAME,
-            points=[PointStruct(id=text_hash, vector=embedding, payload={"text": text})]
-        )
-        return {"score": round(orig_score, 3), "average_similarity": round(avg_sim, 3)}
-    except Exception as e:
-        logger.error(f"Originality check failed: {e}")
-        return {"score": 1.0, "average_similarity": 0.0}
 
-def check_plagiarism(text: str) -> Dict[str, float]:
-    try:
-        cleaned_text = remove_large_quotes(text)
-        embedding = get_embedding(cleaned_text)
-        results = client.search(
-            collection_name=QDRANT_COLLECTION_NAME, query_vector=embedding, limit=1
-        )
-        text_hash = hashlib.md5(text.encode()).hexdigest()
-        client.upsert(
-            collection_name=QDRANT_COLLECTION_NAME,
-            points=[PointStruct(id=text_hash, vector=embedding, payload={"text": text})]
-        )
-        if results and len(results) > 0:
-            sim_score = float(results[0].score)
-            return {"score": round(sim_score, 3)}
-        return {"score": 0.0}
-    except Exception as e:
-        logger.error(f"Plagiarism check failed: {e}")
-        return {"score": 0.0}
+class PlagiarismCheckStrategy(AnalysisStrategy):
+    def analyze(self, text: str) -> Dict[str, float]:
+        """Check for plagiarism by comparing embeddings in Qdrant."""
+        try:
+            cleaned_text = remove_large_quotes(text)
+            embedding = get_embedding(cleaned_text)
+            results = client.query_points(collection_name=QDRANT_COLLECTION_NAME, query_vector=embedding, limit=1)
+            text_hash = hashlib.md5(text.encode()).hexdigest()
+            client.upsert(
+                collection_name=QDRANT_COLLECTION_NAME,
+                points=[PointStruct(id=text_hash, vector=embedding, payload={"text": text})]
+            )
+            return {"score": round(float(results[0].score), 3)} if results else {"score": 0.0}
+        except Exception as e:
+            logger.error(f"Plagiarism check failed: {e}")
+            return {"score": 0.0}
 
-def evaluate_readability(text: str) -> Dict[str, float]:
-    fk = textstat.flesch_kincaid_grade(text)
-    gf = textstat.gunning_fog(text)
-    paragraphs = [p for p in text.split("\n") if len(p.strip()) > 20]
-    paragraph_factor = 1.0 if len(paragraphs) >= 2 else 0.8
-    words = text.split()
-    uniqueness = len(set(words)) / len(words) if words else 1.0
-    uniqueness_factor = 1.0 if uniqueness >= 0.4 else 0.8
-    def clamp(x): 
-        return max(0.0, min(x, 1.0))
-    flesch_diff = abs(fk - 8.0)
-    read_flesch = clamp(1.0 - flesch_diff / 10.0)
-    fog_diff = abs(gf - 10.0)
-    read_fog = clamp(1.0 - fog_diff / 10.0)
-    base_read_score = (read_flesch + read_fog) / 2.0
-    final_read_score = base_read_score * paragraph_factor * uniqueness_factor
-    return {
-        "flesch_kincaid_grade": round(float(fk), 2),
-        "gunning_fog_index": round(float(gf), 2),
-        "readability_score": round(final_read_score, 3)
-    }
+class ReadabilityEvaluationStrategy(AnalysisStrategy):
+    def analyze(self, text: str) -> Dict[str, float]:
+        """Evaluate text readability using Flesch-Kincaid and Gunning Fog indices."""
+        try:
+            fk = textstat.flesch_kincaid_grade(text)
+            gf = textstat.gunning_fog(text)
+            paragraphs = [p for p in text.split("\n") if len(p.strip()) > 20]
+            paragraph_factor = 1.0 if len(paragraphs) >= 2 else 0.8
+            words = text.split()
+            uniqueness_factor = 1.0 if len(set(words)) / len(words) >= 0.4 else 0.8
 
-def compute_final_score(analysis: Dict[str, Any]) -> float:
-    sentiment   = float(analysis["sentiment"]["score"])
-    originality = float(analysis["originality"]["score"])
-    bias        = float(analysis["bias"]["score"])
-    plag        = float(analysis["plagiarism"]["score"])
-    read_score  = float(analysis["readability"].get("readability_score", 0.0))
-    
-    inv_bias = 1.0 - bias
-    inv_plag = 1.0 - plag
+            def clamp(x): return max(0.0, min(x, 1.0))
+            read_flesch = clamp(1.0 - abs(fk - 8.0) / 10.0)
+            read_fog = clamp(1.0 - abs(gf - 10.0) / 10.0)
+            final_score = (read_flesch + read_fog) / 2.0 * paragraph_factor * uniqueness_factor
+            return {
+                "flesch_kincaid_grade": round(float(fk), 2),
+                "gunning_fog_index": round(float(gf), 2),
+                "readability_score": round(final_score, 3)
+            }
+        except Exception as e:
+            logger.error(f"Readability evaluation failed: {e}")
+            return {"flesch_kincaid_grade": 0.0, "gunning_fog_index": 0.0, "readability_score": 0.0}
 
-    final = (
-        0.25 * sentiment +
-        0.25 * originality +
-        0.20 * inv_bias +
-        0.15 * inv_plag +
-        0.15 * read_score
-    )
-    final = max(0.0, min(final, 1.0))
-    return round(final, 3)
-
-###############################################################################
-#                           SCORING COMPOSITE                                  #
-###############################################################################
-
-ANALYSIS_FUNCTIONS = {
-    "sentiment": analyze_sentiment,
-    "bias": detect_bias,
-    "originality": evaluate_originality,
-    "plagiarism": check_plagiarism,
-    "readability": evaluate_readability,
+ANALYSIS_STRATEGIES = {
+    "sentiment": SentimentAnalysisStrategy(),
+    "bias": BiasDetectionStrategy(),
+    "originality": OriginalityEvaluationStrategy(),
+    "plagiarism": PlagiarismCheckStrategy(),
+    "readability": ReadabilityEvaluationStrategy(),
 }
 
-async def dynamic_analysis(
-    text: str,
-    steps: Optional[List[str]] = None
-) -> Dict[str, Any]:
+async def dynamic_analysis(text: str, steps: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Perform dynamic text analysis using specified strategies."""
     if steps is None:
-        steps = list(ANALYSIS_FUNCTIONS.keys())
+        steps = list(ANALYSIS_STRATEGIES.keys())
 
     doc = nlp(text)
-    cleaned_text = " ".join(
-        token.lemma_.lower() for token in doc if not token.is_stop and not token.is_punct
-    )
-
-    arg_map = {
-        "sentiment": cleaned_text,
-        "bias": cleaned_text,
-        "originality": text,
-        "plagiarism": text,
-        "readability": cleaned_text,
-    }
+    cleaned_text = " ".join(token.lemma_.lower() for token in doc if not token.is_stop and not token.is_punct)
+    arg_map = {"sentiment": cleaned_text, "bias": cleaned_text, "originality": text, "plagiarism": text, "readability": cleaned_text}
 
     loop = asyncio.get_running_loop()
-    with ThreadPoolExecutor() as pool:
-        tasks = {step: loop.run_in_executor(pool, partial(ANALYSIS_FUNCTIONS[step], arg_map[step]))
-                 for step in steps}
-        step_keys = list(tasks.keys())
-        results_list = await asyncio.gather(*tasks.values())
+    with ThreadPoolExecutor(max_workers=multiprocessing.cpu_count()) as pool:
+        tasks = {step: loop.run_in_executor(pool, partial(ANALYSIS_STRATEGIES[step].analyze, arg_map[step])) for step in steps}
+        results = await asyncio.gather(*tasks.values())
+    analysis_results = dict(zip(tasks.keys(), results))
 
-    analysis_results = {key: result for key, result in zip(step_keys, results_list)}
     final_score = compute_final_score(analysis_results)
-
-    MIN_WORD_COUNT = 300
     word_count = len(text.split())
-    penalty_info = None
-    if word_count < MIN_WORD_COUNT:
-        penalty_factor = 0.8
-        final_score *= penalty_factor
-        final_score = max(0.0, min(final_score, 1.0))
-        penalty_info = f"Applied 20% penalty due to low word count ({word_count} words)."
-        analysis_results["length_penalty"] = penalty_info
+    if word_count < 300:
+        final_score *= 0.8
+        analysis_results["length_penalty"] = f"Applied 20% penalty due to low word count ({word_count} words)."
 
-    sentiment_val = float(analysis_results["sentiment"]["score"])
-    originality_val = float(analysis_results["originality"]["score"])
-    bias_val = float(analysis_results["bias"]["score"])
-    plag_val = float(analysis_results["plagiarism"]["score"])
-    readability_val = float(analysis_results["readability"].get("readability_score", 0.0))
-    
-    inv_bias = 1.0 - bias_val
-    inv_plag = 1.0 - plag_val
-    
-    weighted_sentiment = 0.25 * sentiment_val
-    weighted_originality = 0.25 * originality_val
-    weighted_inverted_bias = 0.20 * inv_bias
-    weighted_inverted_plag = 0.15 * inv_plag
-    weighted_readability = 0.15 * readability_val
-
+    # Score breakdown
+    scores = {k: analysis_results[k]["score"] if k != "readability" else analysis_results[k]["readability_score"] for k in steps}
     score_breakdown = {
-        "sentiment": {
-            "raw": sentiment_val,
-            "weight": 0.25,
-            "weighted": round(weighted_sentiment, 3),
-            "explanation": "Sentiment score reflects the positive tone of the text."
-        },
-        "originality": {
-            "raw": originality_val,
-            "weight": 0.25,
-            "weighted": round(weighted_originality, 3),
-            "explanation": "Originality is measured by comparing semantic similarity to existing posts."
-        },
-        "inverted_bias": {
-            "raw": round(inv_bias, 3),
-            "weight": 0.20,
-            "weighted": round(weighted_inverted_bias, 3),
-            "explanation": "Inverted bias (1 - bias) rewards neutral content."
-        },
-        "inverted_plagiarism": {
-            "raw": round(inv_plag, 3),
-            "weight": 0.15,
-            "weighted": round(weighted_inverted_plag, 3),
-            "explanation": "Inverted plagiarism (1 - plagiarism) penalizes copied content."
-        },
-        "readability": {
-            "raw": readability_val,
-            "weight": 0.15,
-            "weighted": round(weighted_readability, 3),
-            "explanation": "Readability is based on standard indices, adjusted for text structure and uniqueness."
-        }
+        "sentiment": {"raw": scores["sentiment"], "weight": 0.25, "weighted": round(0.25 * scores["sentiment"], 3)},
+        "originality": {"raw": scores["originality"], "weight": 0.25, "weighted": round(0.25 * scores["originality"], 3)},
+        "inverted_bias": {"raw": 1.0 - scores["bias"], "weight": 0.20, "weighted": round(0.20 * (1.0 - scores["bias"]), 3)},
+        "inverted_plagiarism": {"raw": 1.0 - scores["plagiarism"], "weight": 0.15, "weighted": round(0.15 * (1.0 - scores["plagiarism"]), 3)},
+        "readability": {"raw": scores["readability"], "weight": 0.15, "weighted": round(0.15 * scores["readability"], 3)},
     }
-    
-    if penalty_info:
-        score_breakdown["length_penalty"] = {
-            "applied": True,
-            "penalty_factor": 0.8,
-            "word_count": word_count,
-            "explanation": "Score reduced by 20% due to insufficient content length."
-        }
-    else:
-        score_breakdown["length_penalty"] = {"applied": False, "explanation": "No penalty applied."}
-
-    analysis_results["final_score"] = round(final_score, 3)
-    analysis_results["final_score_percentage"] = f"{final_score * 100:.2f}%"
-    analysis_results["score_breakdown"] = score_breakdown
-
+    analysis_results.update({
+        "final_score": round(final_score, 3),
+        "final_score_percentage": f"{final_score * 100:.2f}%",
+        "score_breakdown": score_breakdown
+    })
     return analysis_results
 
+def compute_final_score(analysis: Dict[str, Any]) -> float:
+    """Compute weighted final score from analysis results."""
+    scores = {
+        "sentiment": analysis["sentiment"]["score"],
+        "originality": analysis["originality"]["score"],
+        "bias": analysis["bias"]["score"],
+        "plagiarism": analysis["plagiarism"]["score"],
+        "readability": analysis["readability"]["readability_score"]
+    }
+    return round(0.25 * scores["sentiment"] + 0.25 * scores["originality"] + 0.20 * (1.0 - scores["bias"]) +
+                 0.15 * (1.0 - scores["plagiarism"]) + 0.15 * scores["readability"], 3)
+
 ###############################################################################
-#                    BLOCKCHAIN TOKEN DISBURSEMENT FUNCTION                    #
+#                    BLOCKCHAIN TOKEN DISBURSEMENT                            #
 ###############################################################################
-from web3 import Web3
-import logging
 
-# Configure logging
-logging.basicConfig(level=logging.ERROR)
-logger = logging.getLogger(__name__)
-def disburse_tokens(postId: int, token_reward: float) -> str:
-    try:
-        if not ACCOUNT_ADDRESS:
-            raise ValueError("ACCOUNT_ADDRESS is not set. Please provide a valid Ethereum address.")
-        if not PRIVATE_KEY:
-            raise ValueError("PRIVATE_KEY is not set. Please provide a valid private key.")
-
-        account_address = Web3.to_checksum_address(ACCOUNT_ADDRESS)
-        amount = int(token_reward * (10 ** 18))
-
-        # Fetch nonce including pending transactions
-        nonce = w3.eth.get_transaction_count(account_address, 'pending')
-
-        txn = voting_contract.functions.aiVote(
-            int(postId),
-            amount
-        ).build_transaction({
-            'from': account_address,
-            'nonce': nonce,
-            'gas': 200000,
-            'gasPrice': w3.to_wei('50', 'gwei')
-        })
-
-        signed_txn = w3.eth.account.sign_transaction(txn, private_key=PRIVATE_KEY)
-        tx_hash = w3.eth.send_raw_transaction(signed_txn.raw_transaction)
-
-        return tx_hash.hex()
-
-    except Exception as e:
-        logger.error(f"Error disbursing tokens for post {postId}: {e}")
-        raise
-    
-    
-    
+def disburse_tokens(post_id: int, token_reward: float, retries: int = 3) -> str:
+    gas_price = w3.eth.gas_price  # Fetch current network gas price
+    for attempt in range(retries):
+        try:
+            amount = int(token_reward * 10**18)
+            nonce = w3.eth.get_transaction_count(Web3.to_checksum_address(ACCOUNT_ADDRESS), 'pending')
+            txn = voting_contract.functions.aiVote(post_id, amount).build_transaction({
+                'from': Web3.to_checksum_address(ACCOUNT_ADDRESS),
+                'nonce': nonce,
+                'gas': 200000,
+                'gasPrice': gas_price
+            })
+            signed_txn = w3.eth.account.sign_transaction(txn, PRIVATE_KEY)
+            tx_hash = w3.eth.send_raw_transaction(signed_txn.raw_transaction)
+            w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)  # Wait up to 120 seconds for confirmation
+            return tx_hash.hex()
+        except Exception as e:
+            if attempt < retries - 1:
+                logger.warning(f"Retrying disbursement for post {post_id} (attempt {attempt + 1}): {e}")
+                time.sleep(2)  # Wait 2 seconds before retrying
+            else:
+                logger.error(f"Failed to disburse tokens for post {post_id} after {retries} attempts: {e}")
+                raise
 ###############################################################################
-#                       SAVE/UPDATE ANALYSIS VIA API CALL                     #
+#                       SAVE/UPDATE ANALYSIS                                  #
 ###############################################################################
 
 async def save_analysis(analysis_data: Dict[str, Any], post_id: int) -> None:
+    """Save analysis data via API."""
     payload = {
         "postId": post_id,
-        "sentimentAnalysisLabel": analysis_data.get("sentiment", {}).get("label", ""),
-        "sentimentAnalysisScore": analysis_data.get("sentiment", {}).get("score", 0.0),
-        "biasDetectionScore": analysis_data.get("bias", {}).get("score", 0.5),
+        "sentimentAnalysisLabel": analysis_data["sentiment"]["label"],
+        "sentimentAnalysisScore": analysis_data["sentiment"]["score"],
+        "biasDetectionScore": analysis_data["bias"]["score"],
         "biasDetectionDirection": "",
-        "originalityScore": analysis_data.get("originality", {}).get("score", 1.0),
-        "similarityScore": analysis_data.get("originality", {}).get("average_similarity", 0.0),
-        "readabilityFleschKincaid": analysis_data.get("readability", {}).get("flesch_kincaid_grade", 0.0),
-        "readabilityGunningFog": analysis_data.get("readability", {}).get("gunning_fog_index", 0.0),
+        "originalityScore": analysis_data["originality"]["score"],
+        "similarityScore": analysis_data["originality"]["average_similarity"],
+        "readabilityFleschKincaid": analysis_data["readability"]["flesch_kincaid_grade"],
+        "readabilityGunningFog": analysis_data["readability"]["gunning_fog_index"],
         "mainTopic": "",
         "secondaryTopics": [],
         "rating": round(analysis_data["final_score"] * 100),
@@ -446,94 +345,68 @@ async def save_analysis(analysis_data: Dict[str, Any], post_id: int) -> None:
         "tokenReward": analysis_data.get("token_reward", 0.0),
         "scoreBreakdown": analysis_data["score_breakdown"]
     }
-
     async with httpx.AsyncClient() as client:
-        response = await client.post(API_SAVE_ENDPOINT, json=payload)
-        response.raise_for_status()
-        saved = response.json()
-        logger.info(f"Saved analysis for post {post_id}: {saved}")
+        try:
+            response = await client.post(API_SAVE_ENDPOINT, json=payload)
+            response.raise_for_status()
+            logger.info(f"Saved analysis for post {post_id}: {response.json()}")
+        except Exception as e:
+            logger.error(f"Failed to save analysis for post {post_id}: {e}")
 
 async def update_analysis(analysis_data: Dict[str, Any], post_id: int) -> None:
-    payload = {
-        "tokenReward": analysis_data.get("token_reward", 0.0)
-    }
-    update_url = f"{API_UPDATE_ENDPOINT}/{post_id}"
+    """Update analysis data via API."""
+    payload = {"tokenReward": analysis_data.get("token_reward", 0.0)}
     async with httpx.AsyncClient() as client:
-        response = await client.put(update_url, json=payload)
-        response.raise_for_status()
-        updated = response.json()
-        logger.info(f"Updated analysis for post {post_id}: {updated}")
+        try:
+            response = await client.put(f"{API_UPDATE_ENDPOINT}/{post_id}", json=payload)
+            response.raise_for_status()
+            logger.info(f"Updated analysis for post {post_id}: {response.json()}")
+        except Exception as e:
+            logger.error(f"Failed to update analysis for post {post_id}: {e}")
 
 ###############################################################################
-#                                   MAIN DEMO                                 #
+#                                   MAIN                                      #
 ###############################################################################
 
-async def main():
+async def main() -> None:
+    """Main function to fetch, analyze, and reward posts."""
     url = "http://localhost:3000/api/posts"
-    logger.info(f"Fetching posts from {url} ...")
-    try:
-        posts = fetch_posts(url)
-        logger.info(f"Fetched {len(posts)} post(s). Analyzing each...")
-    except Exception as e:
-        logger.error(f"Failed to fetch posts: {e}")
-        posts = []
+    logger.info(f"Fetching posts from {url}...")
+    posts = await fetch_posts_async(url)
 
     post_results = []
-    # Analyze and save analysis for all posts.
     for idx, post in enumerate(posts, start=1):
         content = post.get("content", "")
         if not content:
             logger.warning(f"Post {idx} has no content. Skipping.")
             continue
-        analysis_result = await dynamic_analysis(content)
-        post_id = post.get("id", idx)
-        # Include author's wallet if available (not used for disbursement in this version).
-        author_wallet = post.get("author", {}).get("walletAddress", None)
-        post_results.append({
-            "post_id": post_id,
-            "final_score": analysis_result["final_score"],
-            "analysis": analysis_result,
-            "author_wallet": author_wallet
-        })
-        print(f"\n=== ANALYSIS FOR POST ID {post_id} ===")
-        # print(json.dumps(analysis_result, indent=2))
         try:
+            analysis_result = await dynamic_analysis(content)
+            post_id = post.get("id", idx)
+            post_results.append({
+                "post_id": post_id,
+                "final_score": analysis_result["final_score"],
+                "analysis": analysis_result,
+                "author_wallet": post.get("author", {}).get("walletAddress")
+            })
+            print(f"\n=== ANALYSIS FOR POST ID {post_id} ===")
             await save_analysis(analysis_result, post_id)
-        except Exception as error:
-            logger.error(f"Error saving analysis for post {post_id}: {error}")
+        except Exception as e:
+            logger.error(f"Error analyzing post {idx}: {e}")
 
-    # Compute reward distribution for top 10 posts.
+    # Distribute rewards to top 10 posts
     top_posts = sorted(post_results, key=lambda x: x["final_score"], reverse=True)[:10]
-    total_score = sum(item["final_score"] for item in top_posts)
-    
-    if total_score > 0:
-        for item in top_posts:
-            token_reward = DAILY_TOKEN_BUDGET * item["final_score"] / total_score
-            item["analysis"]["token_reward"] = round(token_reward, 3)
-    else:
-        equal_share = DAILY_TOKEN_BUDGET / len(top_posts) if top_posts else 0
-        for item in top_posts:
-            item["analysis"]["token_reward"] = round(equal_share, 3)
-
-    # Iterate over top posts to print reward info and disburse tokens.
+    total_score = sum(item["final_score"] for item in top_posts) or 1  # Avoid division by zero
     for item in top_posts:
-        print(f"Post ID {item['post_id']}: Final Score = {item['final_score']}, "
-              f"Token Reward = {item['analysis']['token_reward']} tokens")
-        # Uncomment below if you wish to update the analysis via the API.
-        # try:
-        #     await update_analysis(item["analysis"], item["post_id"])
-        # except Exception as error:
-        #     logger.error(f"Error updating analysis for post {item['post_id']}: {error}")
-            
+        token_reward = DAILY_TOKEN_BUDGET * item["final_score"] / total_score
+        item["analysis"]["token_reward"] = round(token_reward, 3)
+        print(f"Post ID {item['post_id']}: Score = {item['final_score']}, Reward = {item['analysis']['token_reward']} tokens")
         try:
             tx_hash = disburse_tokens(item["post_id"], item["analysis"]["token_reward"])
             logger.info(f"Disbursed {item['analysis']['token_reward']} tokens for post {item['post_id']} in tx {tx_hash}")
-        except Exception as bc_error:
-            logger.error(f"Error disbursing tokens for post {item['post_id']}: {bc_error}")
-
-if __name__ == "__main__":
-    asyncio.run(main())
-
+            await update_analysis(item["analysis"], item["post_id"])
+        except Exception as e:
+            logger.error(f"Failed to disburse tokens for post {item['post_id']}: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())

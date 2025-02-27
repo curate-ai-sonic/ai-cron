@@ -25,6 +25,7 @@ uvloop = "^0.17.0"
 
 # Dev dependencies go in a group (newer Poetry style)
 web3 = "7.7.0"
+dotenv = "^0.9.9"
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.2"
 
