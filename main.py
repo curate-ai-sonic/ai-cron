@@ -55,8 +55,8 @@ API_UPDATE_ENDPOINT = "http://localhost:3000/api/ratings/ai"
 WEB3_PROVIDER = os.getenv("WEB3_PROVIDER", "https://base-sepolia.g.alchemy.com/v2/LYBjzhlxMCEmYvtnrp4uRPBuJ0E7baIT")
 TOKEN_CONTRACT_ADDRESS = os.getenv("TOKEN_CONTRACT_ADDRESS", "0x8262AD6adc5650d8ee0D86622463E7dA976bd102")
 VOTING_CONTRACT_ADDRESS = os.getenv("VOTING_CONTRACT_ADDRESS", "0xBa8d238436B889169692Ffdb993341C36D736277")
-PRIVATE_KEY = os.getenv("PRIVATE_KEY")
-ACCOUNT_ADDRESS = os.getenv("ACCOUNT_ADDRESS")
+PRIVATE_KEY = os.getenv("PRIVATE_KEY","0xf39e7ccbf9f6f4e03591f5f9d2d15aba9a978b9c61734e80a5c99c7a30ab64eb")
+ACCOUNT_ADDRESS = os.getenv("ACCOUNT_ADDRESS","0x30418a5C1C1Fd8297414F596A6C7B3bb8F7B4b7d")
 
 w3 = Web3(Web3.HTTPProvider(WEB3_PROVIDER))
 if not w3.is_connected():
@@ -383,27 +383,46 @@ async def dynamic_analysis(
 ###############################################################################
 #                    BLOCKCHAIN TOKEN DISBURSEMENT FUNCTION                    #
 ###############################################################################
+from web3 import Web3
+import logging
 
-def disburse_tokens(postId: float, token_reward: float) -> str:
-    """
-    Calls the token contract's distributeTokens function.
-    Assumes token_reward is in tokens (float) and converts to base units (e.g. 18 decimals).
-    Returns the transaction hash.
-    """
+# Configure logging
+logging.basicConfig(level=logging.ERROR)
+logger = logging.getLogger(__name__)
+def disburse_tokens(postId: int, token_reward: float) -> str:
     try:
-        # Assume token has 18 decimals.
+        if not ACCOUNT_ADDRESS:
+            raise ValueError("ACCOUNT_ADDRESS is not set. Please provide a valid Ethereum address.")
+        if not PRIVATE_KEY:
+            raise ValueError("PRIVATE_KEY is not set. Please provide a valid private key.")
+
+        account_address = Web3.to_checksum_address(ACCOUNT_ADDRESS)
         amount = int(token_reward * (10 ** 18))
-        nonce = w3.eth.getTransactionCount(ACCOUNT_ADDRESS)
+
+        # Fetch nonce including pending transactions
+        nonce = w3.eth.get_transaction_count(account_address, 'pending')
+
         txn = voting_contract.functions.aiVote(
-            postId, amount
-        )
-        signed_txn = w3.eth.account.signTransaction(txn, private_key=PRIVATE_KEY)
-        tx_hash = w3.eth.sendRawTransaction(signed_txn.rawTransaction)
+            int(postId),
+            amount
+        ).build_transaction({
+            'from': account_address,
+            'nonce': nonce,
+            'gas': 200000,
+            'gasPrice': w3.to_wei('50', 'gwei')
+        })
+
+        signed_txn = w3.eth.account.sign_transaction(txn, private_key=PRIVATE_KEY)
+        tx_hash = w3.eth.send_raw_transaction(signed_txn.raw_transaction)
+
         return tx_hash.hex()
+
     except Exception as e:
         logger.error(f"Error disbursing tokens for post {postId}: {e}")
         raise
-
+    
+    
+    
 ###############################################################################
 #                       SAVE/UPDATE ANALYSIS VIA API CALL                     #
 ###############################################################################
@@ -468,7 +487,7 @@ async def main():
             continue
         analysis_result = await dynamic_analysis(content)
         post_id = post.get("id", idx)
-        # Also, include the author's wallet address if available.
+        # Include author's wallet if available (not used for disbursement in this version).
         author_wallet = post.get("author", {}).get("walletAddress", None)
         post_results.append({
             "post_id": post_id,
@@ -477,7 +496,7 @@ async def main():
             "author_wallet": author_wallet
         })
         print(f"\n=== ANALYSIS FOR POST ID {post_id} ===")
-        print(json.dumps(analysis_result, indent=2))
+        # print(json.dumps(analysis_result, indent=2))
         try:
             await save_analysis(analysis_result, post_id)
         except Exception as error:
@@ -496,24 +515,25 @@ async def main():
         for item in top_posts:
             item["analysis"]["token_reward"] = round(equal_share, 3)
 
-    print("\n=== TOP POSTS REWARD DISTRIBUTION ===")
+    # Iterate over top posts to print reward info and disburse tokens.
     for item in top_posts:
         print(f"Post ID {item['post_id']}: Final Score = {item['final_score']}, "
               f"Token Reward = {item['analysis']['token_reward']} tokens")
+        # Uncomment below if you wish to update the analysis via the API.
+        # try:
+        #     await update_analysis(item["analysis"], item["post_id"])
+        # except Exception as error:
+        #     logger.error(f"Error updating analysis for post {item['post_id']}: {error}")
+            
         try:
-            # Update the analysis record with the tokenReward.
-            await update_analysis(item["analysis"], item["post_id"])
-        except Exception as error:
-            logger.error(f"Error updating analysis for post {item['post_id']}: {error}")
-        # Additionally, call the blockchain to disburse tokens if the author wallet exists.
-        if item.get("author_wallet"):
-            try:
-                tx_hash = disburse_tokens(item["id"], item["analysis"]["token_reward"])
-                logger.info(f"Disbursed {item['analysis']['token_reward']} tokens to {item['author_wallet']} in tx {tx_hash}")
-            except Exception as bc_error:
-                logger.error(f"Error disbursing tokens for post {item['post_id']}: {bc_error}")
-        else:
-            logger.warning(f"Post {item['post_id']} has no author wallet; skipping blockchain disbursement.")
+            tx_hash = disburse_tokens(item["post_id"], item["analysis"]["token_reward"])
+            logger.info(f"Disbursed {item['analysis']['token_reward']} tokens for post {item['post_id']} in tx {tx_hash}")
+        except Exception as bc_error:
+            logger.error(f"Error disbursing tokens for post {item['post_id']}: {bc_error}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
 
 if __name__ == "__main__":
     asyncio.run(main())
