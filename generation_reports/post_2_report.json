@@ -1,0 +1,135 @@
+{
+    "post": {
+        "id": 2,
+        "title": "AI-Driven Predictive Maintenance Revolutionizes Manufacturing",
+        "content": "In the world of manufacturing, predictive maintenance powered by AI is reducing downtime and cutting costs. Sensors, IoT devices, and advanced analytics work together to anticipate equipment failures before they occur, allowing companies to schedule repairs proactively and minimize production interruptions.",
+        "published": true,
+        "ipfsHash": "QmZ2",
+        "authorAddress": "0x3ad456d3753BBA798dBCF1073D111A2f12b0feD2",
+        "userRating": 0,
+        "aiRatingId": null,
+        "createdAt": "2025-02-23T14:02:11.166Z",
+        "updatedAt": "2025-02-23T14:02:11.166Z",
+        "publishedAt": null,
+        "disbursementTotal": null,
+        "aiRating": {
+            "id": 223,
+            "rating": 23,
+            "createdAt": "2025-02-27T17:33:37.405Z",
+            "postId": 2,
+            "sentimentAnalysisLabel": "NEGATIVE",
+            "sentimentAnalysisScore": 0.009,
+            "biasDetectionScore": 0.541,
+            "biasDetectionDirection": "",
+            "originalityScore": 0.349,
+            "similarityScore": 0.651,
+            "readabilityFleschKincaid": 23.7,
+            "readabilityGunningFog": 25.49,
+            "mainTopic": "",
+            "secondaryTopics": [],
+            "tokenReward": 455.594,
+            "finalScore": 0.229,
+            "finalScorePercentage": "22.88%",
+            "scoreBreakdown": {
+                "sentiment": {
+                    "raw": 0.009,
+                    "weight": 0.25,
+                    "weighted": 0.002,
+                    "explanation": "Sentiment score reflects the positive tone of the text."
+                },
+                "originality": {
+                    "raw": 0.349,
+                    "weight": 0.25,
+                    "weighted": 0.087,
+                    "explanation": "Originality is measured by comparing semantic similarity to existing posts."
+                },
+                "readability": {
+                    "raw": 0,
+                    "weight": 0.15,
+                    "weighted": 0,
+                    "explanation": "Readability is based on standard indices, adjusted for text structure and uniqueness."
+                },
+                "inverted_bias": {
+                    "raw": 0.459,
+                    "weight": 0.2,
+                    "weighted": 0.092,
+                    "explanation": "Inverted bias (1 - bias) rewards neutral content."
+                },
+                "length_penalty": {
+                    "applied": true,
+                    "word_count": 41,
+                    "explanation": "Score reduced by 20% due to insufficient content length.",
+                    "penalty_factor": 0.8
+                },
+                "inverted_plagiarism": {
+                    "raw": 0.699,
+                    "weight": 0.15,
+                    "weighted": 0.105,
+                    "explanation": "Inverted plagiarism (1 - plagiarism) penalizes copied content."
+                }
+            }
+        },
+        "author": {
+            "walletAddress": "0x3ad456d3753BBA798dBCF1073D111A2f12b0feD2"
+        }
+    },
+    "analysis": {
+        "sentiment": {
+            "label": "NEGATIVE",
+            "score": 0.009,
+            "time_taken": 0.0734701156616211
+        },
+        "bias": {
+            "score": 0.541,
+            "time_taken": 3.923492908477783
+        },
+        "originality": {
+            "score": 1.0,
+            "average_similarity": 0.0,
+            "time_taken": 0.07958388328552246
+        },
+        "plagiarism": {
+            "score": 0.0,
+            "time_taken": 0.07853126525878906
+        },
+        "readability": {
+            "flesch_kincaid_grade": 23.7,
+            "gunning_fog_index": 25.49,
+            "readability_score": 0.0,
+            "time_taken": 0.000492095947265625
+        },
+        "length_penalty": "Applied 20% penalty due to low word count (41 words).",
+        "final_score": 0.395,
+        "final_score_percentage": "39.52%",
+        "score_breakdown": {
+            "sentiment": {
+                "raw": 0.009,
+                "weight": 0.25,
+                "weighted": 0.002
+            },
+            "originality": {
+                "raw": 1.0,
+                "weight": 0.25,
+                "weighted": 0.25
+            },
+            "inverted_bias": {
+                "raw": 0.45899999999999996,
+                "weight": 0.2,
+                "weighted": 0.092
+            },
+            "inverted_plagiarism": {
+                "raw": 1.0,
+                "weight": 0.15,
+                "weighted": 0.15
+            },
+            "readability": {
+                "raw": 0.0,
+                "weight": 0.15,
+                "weighted": 0.0
+            }
+        },
+        "total_time": 3.9410359859466553,
+        "token_reward": 455.594,
+        "tx_hash": "fdf3770c602b0cf865f04aa1cdf924208fe9b603f05696a7dd71444a6fc8c646"
+    }
+}

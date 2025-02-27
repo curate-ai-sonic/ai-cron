@@ -27,8 +27,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 
 from dotenv import load_dotenv
-load_dotenv()  # This loads environment variables from a .env file in the current directory.
-
+load_dotenv()  # Loads environment variables from a .env file
 
 # Ollama (optional for bias detection)
 try:
@@ -41,7 +40,7 @@ except ImportError:
 ###############################################################################
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Validate required environment variables
 REQUIRED_ENV_VARS = ["WEB3_PROVIDER", "TOKEN_CONTRACT_ADDRESS", "VOTING_CONTRACT_ADDRESS", "PRIVATE_KEY", "ACCOUNT_ADDRESS"]
@@ -119,6 +118,7 @@ async def fetch_posts_async(url: str) -> List[Dict[str, Any]]:
         try:
             response = await client.get(url)
             response.raise_for_status()
+            logger.info(f"Fetched posts from {url}: {response.status_code}")
             return response.json()
         except Exception as e:
             logger.error(f"Failed to fetch posts from {url}: {e}")
@@ -131,6 +131,16 @@ def get_embedding(text: str) -> List[float]:
 def remove_large_quotes(text: str) -> str:
     """Remove quoted blocks of 30+ words to prevent plagiarism gaming."""
     return re.sub(r'"(?:\S+\s+){30,}"', '', text)
+
+def save_report_to_file(report: Dict[str, Any], post_id: int) -> None:
+    """Save the analysis report to a JSON file in the generation_reports folder."""
+    folder = "generation_reports"
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+    filename = os.path.join(folder, f"post_{post_id}_report.json")
+    with open(filename, 'w') as f:
+        json.dump(report, f, indent=4)
+    logger.info(f"Saved report for post {post_id} to {filename}")
 
 ###############################################################################
 #                            ANALYSIS STRATEGIES                              #
@@ -145,41 +155,44 @@ class AnalysisStrategy(ABC):
 class SentimentAnalysisStrategy(AnalysisStrategy):
     def analyze(self, text: str) -> Dict[str, Any]:
         """Analyze text sentiment using the Hugging Face pipeline."""
+        start_time = time.time()
         try:
             result = sentiment_analyzer(text)[0]
             label = result["label"]
             raw_score = float(result["score"])
             score = 1.0 - raw_score if label.upper() == "NEGATIVE" else raw_score
-            return {"label": label, "score": round(score, 3)}
+            return {"label": label, "score": round(score, 3), "time_taken": time.time() - start_time}
         except Exception as e:
             logger.error(f"Sentiment analysis failed: {e}")
-            return {"label": "UNKNOWN", "score": 0.5}
+            return {"label": "UNKNOWN", "score": 0.5, "time_taken": time.time() - start_time}
 
 class BiasDetectionStrategy(AnalysisStrategy):
     def analyze(self, text: str) -> Dict[str, float]:
         """Detect bias using Ollama or a fallback zero-shot classifier."""
+        start_time = time.time()
         if ollama:
             try:
                 prompt = f"Analyze bias (0=neutral, 1=biased):\n\n{text}"
                 response = ollama.generate(model="llama3.2", prompt=prompt)
                 match = re.search(r"0?\.?\d+", response.get("response", ""))
-                return {"score": round(float(match.group()), 3)} if match else {"score": 0.5}
+                return {"score": round(float(match.group()), 3), "time_taken": time.time() - start_time} if match else {"score": 0.5, "time_taken": time.time() - start_time}
             except Exception as e:
                 logger.error(f"Ollama bias detection failed: {e}")
-                return {"score": 0.5}
+                return {"score": 0.5, "time_taken": time.time() - start_time}
         else:
             logger.info("Ollama unavailable, using zero-shot classification.")
             try:
                 classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
                 result = classifier(text, candidate_labels=["neutral", "biased"])
-                return {"score": round(result["scores"][result["labels"].index("biased")], 3)}
+                return {"score": round(result["scores"][result["labels"].index("biased")], 3), "time_taken": time.time() - start_time}
             except Exception as e:
                 logger.error(f"Bias detection fallback failed: {e}")
-                return {"score": 0.5}
+                return {"score": 0.5, "time_taken": time.time() - start_time}
 
 class OriginalityEvaluationStrategy(AnalysisStrategy):
     def analyze(self, text: str) -> Dict[str, float]:
         """Evaluate text originality using Qdrant similarity search."""
+        start_time = time.time()
         try:
             embedding = get_embedding(text)
             results = client.query_points(collection_name=QDRANT_COLLECTION_NAME, query_vector=embedding, limit=5)
@@ -189,16 +202,17 @@ class OriginalityEvaluationStrategy(AnalysisStrategy):
                 points=[PointStruct(id=text_hash, vector=embedding, payload={"text": text})]
             )
             if not results:
-                return {"score": 1.0, "average_similarity": 0.0}
+                return {"score": 1.0, "average_similarity": 0.0, "time_taken": time.time() - start_time}
             avg_sim = sum(r.score for r in results) / len(results)
-            return {"score": round(1.0 - avg_sim, 3), "average_similarity": round(avg_sim, 3)}
+            return {"score": round(1.0 - avg_sim, 3), "average_similarity": round(avg_sim, 3), "time_taken": time.time() - start_time}
         except Exception as e:
             logger.error(f"Originality check failed: {e}")
-            return {"score": 1.0, "average_similarity": 0.0}
+            return {"score": 1.0, "average_similarity": 0.0, "time_taken": time.time() - start_time}
 
 class PlagiarismCheckStrategy(AnalysisStrategy):
     def analyze(self, text: str) -> Dict[str, float]:
         """Check for plagiarism by comparing embeddings in Qdrant."""
+        start_time = time.time()
         try:
             cleaned_text = remove_large_quotes(text)
             embedding = get_embedding(cleaned_text)
@@ -208,14 +222,16 @@ class PlagiarismCheckStrategy(AnalysisStrategy):
                 collection_name=QDRANT_COLLECTION_NAME,
                 points=[PointStruct(id=text_hash, vector=embedding, payload={"text": text})]
             )
-            return {"score": round(float(results[0].score), 3)} if results else {"score": 0.0}
+            score = round(float(results[0].score), 3) if results else 0.0
+            return {"score": score, "time_taken": time.time() - start_time}
         except Exception as e:
             logger.error(f"Plagiarism check failed: {e}")
-            return {"score": 0.0}
+            return {"score": 0.0, "time_taken": time.time() - start_time}
 
 class ReadabilityEvaluationStrategy(AnalysisStrategy):
     def analyze(self, text: str) -> Dict[str, float]:
         """Evaluate text readability using Flesch-Kincaid and Gunning Fog indices."""
+        start_time = time.time()
         try:
             fk = textstat.flesch_kincaid_grade(text)
             gf = textstat.gunning_fog(text)
@@ -231,11 +247,12 @@ class ReadabilityEvaluationStrategy(AnalysisStrategy):
             return {
                 "flesch_kincaid_grade": round(float(fk), 2),
                 "gunning_fog_index": round(float(gf), 2),
-                "readability_score": round(final_score, 3)
+                "readability_score": round(final_score, 3),
+                "time_taken": time.time() - start_time
             }
         except Exception as e:
             logger.error(f"Readability evaluation failed: {e}")
-            return {"flesch_kincaid_grade": 0.0, "gunning_fog_index": 0.0, "readability_score": 0.0}
+            return {"flesch_kincaid_grade": 0.0, "gunning_fog_index": 0.0, "readability_score": 0.0, "time_taken": time.time() - start_time}
 
 ANALYSIS_STRATEGIES = {
     "sentiment": SentimentAnalysisStrategy(),
@@ -246,10 +263,11 @@ ANALYSIS_STRATEGIES = {
 }
 
 async def dynamic_analysis(text: str, steps: Optional[List[str]] = None) -> Dict[str, Any]:
-    """Perform dynamic text analysis using specified strategies."""
+    """Perform dynamic text analysis using specified strategies with timings."""
     if steps is None:
         steps = list(ANALYSIS_STRATEGIES.keys())
 
+    start_time = time.time()
     doc = nlp(text)
     cleaned_text = " ".join(token.lemma_.lower() for token in doc if not token.is_stop and not token.is_punct)
     arg_map = {"sentiment": cleaned_text, "bias": cleaned_text, "originality": text, "plagiarism": text, "readability": cleaned_text}
@@ -278,7 +296,8 @@ async def dynamic_analysis(text: str, steps: Optional[List[str]] = None) -> Dict
     analysis_results.update({
         "final_score": round(final_score, 3),
         "final_score_percentage": f"{final_score * 100:.2f}%",
-        "score_breakdown": score_breakdown
+        "score_breakdown": score_breakdown,
+        "total_time": time.time() - start_time
     })
     return analysis_results
 
@@ -299,7 +318,7 @@ def compute_final_score(analysis: Dict[str, Any]) -> float:
 ###############################################################################
 
 def disburse_tokens(post_id: int, token_reward: float, retries: int = 3) -> str:
-    gas_price = w3.eth.gas_price  # Fetch current network gas price
+    gas_price = w3.eth.gas_price
     for attempt in range(retries):
         try:
             amount = int(token_reward * 10**18)
@@ -312,15 +331,17 @@ def disburse_tokens(post_id: int, token_reward: float, retries: int = 3) -> str:
             })
             signed_txn = w3.eth.account.sign_transaction(txn, PRIVATE_KEY)
             tx_hash = w3.eth.send_raw_transaction(signed_txn.raw_transaction)
-            w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)  # Wait up to 120 seconds for confirmation
+            receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+            logger.info(f"Transaction successful for post {post_id}: {tx_hash.hex()}, Gas Used: {receipt['gasUsed']}")
             return tx_hash.hex()
         except Exception as e:
             if attempt < retries - 1:
                 logger.warning(f"Retrying disbursement for post {post_id} (attempt {attempt + 1}): {e}")
-                time.sleep(2)  # Wait 2 seconds before retrying
+                time.sleep(2)
             else:
                 logger.error(f"Failed to disburse tokens for post {post_id} after {retries} attempts: {e}")
                 raise
+
 ###############################################################################
 #                       SAVE/UPDATE ANALYSIS                                  #
 ###############################################################################
@@ -369,12 +390,16 @@ async def update_analysis(analysis_data: Dict[str, Any], post_id: int) -> None:
 ###############################################################################
 
 async def main() -> None:
-    """Main function to fetch, analyze, and reward posts."""
+    """Main function to fetch, analyze, reward posts, and save reports."""
     url = "http://localhost:3000/api/posts"
     logger.info(f"Fetching posts from {url}...")
     posts = await fetch_posts_async(url)
 
     post_results = []
+    total_posts = len(posts)
+    analyzed_posts = 0
+    total_tokens_disbursed = 0.0
+
     for idx, post in enumerate(posts, start=1):
         content = post.get("content", "")
         if not content:
@@ -384,29 +409,52 @@ async def main() -> None:
             analysis_result = await dynamic_analysis(content)
             post_id = post.get("id", idx)
             post_results.append({
-                "post_id": post_id,
-                "final_score": analysis_result["final_score"],
+                "post": post,
                 "analysis": analysis_result,
-                "author_wallet": post.get("author", {}).get("walletAddress")
+                "final_score": analysis_result["final_score"]
             })
+            analyzed_posts += 1
             print(f"\n=== ANALYSIS FOR POST ID {post_id} ===")
             await save_analysis(analysis_result, post_id)
         except Exception as e:
-            logger.error(f"Error analyzing post {idx}: {e}")
+            logger.error(f"Error analyzing post {idx} (ID: {post.get('id', idx)}): {e}")
 
     # Distribute rewards to top 10 posts
     top_posts = sorted(post_results, key=lambda x: x["final_score"], reverse=True)[:10]
     total_score = sum(item["final_score"] for item in top_posts) or 1  # Avoid division by zero
+    rewarded_posts = 0
     for item in top_posts:
         token_reward = DAILY_TOKEN_BUDGET * item["final_score"] / total_score
         item["analysis"]["token_reward"] = round(token_reward, 3)
-        print(f"Post ID {item['post_id']}: Score = {item['final_score']}, Reward = {item['analysis']['token_reward']} tokens")
+        total_tokens_disbursed += token_reward
+        print(f"Post ID {item['post']['id']}: Score = {item['final_score']}, Reward = {item['analysis']['token_reward']} tokens")
         try:
-            tx_hash = disburse_tokens(item["post_id"], item["analysis"]["token_reward"])
-            logger.info(f"Disbursed {item['analysis']['token_reward']} tokens for post {item['post_id']} in tx {tx_hash}")
-            await update_analysis(item["analysis"], item["post_id"])
+            tx_hash = disburse_tokens(item["post"]["id"], item["analysis"]["token_reward"])
+            item["analysis"]["tx_hash"] = tx_hash
+            rewarded_posts += 1
+            await update_analysis(item["analysis"], item["post"]["id"])
         except Exception as e:
-            logger.error(f"Failed to disburse tokens for post {item['post_id']}: {e}")
+            logger.error(f"Failed to disburse tokens for post {item['post']['id']}: {e}")
+
+    # Save reports for all posts
+    for item in post_results:
+        report = {
+            "post": item["post"],
+            "analysis": item["analysis"]
+        }
+        save_report_to_file(report, item["post"]["id"])
+
+    # Generate summary report
+    summary = {
+        "total_posts": total_posts,
+        "analyzed_posts": analyzed_posts,
+        "rewarded_posts": rewarded_posts,
+        "total_tokens_disbursed": round(total_tokens_disbursed, 3),
+        "average_final_score": round(sum(item["final_score"] for item in post_results) / analyzed_posts, 3) if analyzed_posts > 0 else 0.0
+    }
+    logger.info(f"Summary Report: {summary}")
+    with open("generation_reports/summary_report.json", "w") as f:
+        json.dump(summary, f, indent=4)
 
 if __name__ == "__main__":
     asyncio.run(main())

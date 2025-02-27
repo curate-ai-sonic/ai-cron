@@ -1,0 +1,132 @@
+{
+    "post": {
+        "id": 1,
+        "title": "The Ride-Sharing and Robotaxi Revenue Model Problem No One Talks About",
+        "content": "Robotaxi services are spreading broadly. While they\u2019ve clearly had issues in San Francisco \u2014 as have I, driving in San Francisco \u2014 those challenges are improving. Now, both Uber and Lyft appear to be taking steps toward replacing their ride-share drivers with AI.\n    \nWe may be on the verge of one of the first large-scale AI job replacement efforts that everyone will witness. This transition will fix a key issue with ride-sharing by aligning revenue more directly with its users. However, it won\u2019t address a deeper problem that ride-sharing has in common with social media: a decoupled revenue business model \u2014 where the people using a service aren\u2019t necessarily funding it.\n\nLet\u2019s talk about decoupled revenue. Then, we\u2019ll close with my Product of the Week: a new and awesome notebook from Lenovo that sports a brand-new processor from Intel.\n\nThe Problem With Decoupled Revenue\nThe problem with both social media and ride-sharing is that the people paying for the service aren\u2019t treated as the primary customers.\n    \nWith social media, advertisers fund the platforms, but users engage with content as if they were the primary customers. With ride-sharing, the platform enables car owners to monetize their vehicles, but that\u2019s a cost of the service. Since riders are the ones paying, they should be the customers of the drivers, not the platform.\n\nBoth conditions are true. Users drive the advertising revenue because ads are worthless without users. Likewise, if there aren\u2019t any drivers, there is nothing for riders to use.\n\nManagers often fail to make this distinction. I once knew a general manager who argued that his plant would run much better without sales reps mucking things up \u2014 forgetting they were the reason the plant had business in the first place. He was fired shortly thereafter because he was an idiot, but this wasn\u2019t a unique situation.\n\nWill Robotaxis Disrupt or Fix Ride-Sharing?\nRobotaxis may fix ride-share or badly break it. If Uber and Lyft go to robotaxi services, then the people who use this service to monetize their cars are kind of screwed unless they want to work for nearly free because they won\u2019t be able to compete with an AI driver.\n    \nFor us users, things will become much more convenient with lower prices, better service, and less concern about whether your driver is a serial killer.",
+        "published": true,
+        "ipfsHash": "QmZ1",
+        "authorAddress": "0x3ad456d3753BBA798dBCF1073D111A2f12b0feD2",
+        "userRating": 0,
+        "aiRatingId": null,
+        "createdAt": "2025-02-23T14:02:11.135Z",
+        "updatedAt": "2025-02-23T14:02:11.135Z",
+        "publishedAt": null,
+        "disbursementTotal": null,
+        "aiRating": {
+            "id": 222,
+            "rating": 32,
+            "createdAt": "2025-02-27T17:33:34.612Z",
+            "postId": 1,
+            "sentimentAnalysisLabel": "NEGATIVE",
+            "sentimentAnalysisScore": 0.004,
+            "biasDetectionScore": 0.647,
+            "biasDetectionDirection": "",
+            "originalityScore": 1,
+            "similarityScore": 0,
+            "readabilityFleschKincaid": 82.1,
+            "readabilityGunningFog": 82.17,
+            "mainTopic": "",
+            "secondaryTopics": [],
+            "tokenReward": 544.406,
+            "finalScore": 0.322,
+            "finalScorePercentage": "32.20%",
+            "scoreBreakdown": {
+                "sentiment": {
+                    "raw": 0.004,
+                    "weight": 0.25,
+                    "weighted": 0.001,
+                    "explanation": "Sentiment score reflects the positive tone of the text."
+                },
+                "originality": {
+                    "raw": 1,
+                    "weight": 0.25,
+                    "weighted": 0.25,
+                    "explanation": "Originality is measured by comparing semantic similarity to existing posts."
+                },
+                "readability": {
+                    "raw": 0,
+                    "weight": 0.15,
+                    "weighted": 0,
+                    "explanation": "Readability is based on standard indices, adjusted for text structure and uniqueness."
+                },
+                "inverted_bias": {
+                    "raw": 0.353,
+                    "weight": 0.2,
+                    "weighted": 0.071,
+                    "explanation": "Inverted bias (1 - bias) rewards neutral content."
+                },
+                "length_penalty": {
+                    "applied": false,
+                    "explanation": "No penalty applied."
+                },
+                "inverted_plagiarism": {
+                    "raw": 0,
+                    "weight": 0.15,
+                    "weighted": 0,
+                    "explanation": "Inverted plagiarism (1 - plagiarism) penalizes copied content."
+                }
+            }
+        },
+        "author": {
+            "walletAddress": "0x3ad456d3753BBA798dBCF1073D111A2f12b0feD2"
+        }
+    },
+    "analysis": {
+        "sentiment": {
+            "label": "NEGATIVE",
+            "score": 0.004,
+            "time_taken": 0.1674971580505371
+        },
+        "bias": {
+            "score": 0.647,
+            "time_taken": 3.8484578132629395
+        },
+        "originality": {
+            "score": 1.0,
+            "average_similarity": 0.0,
+            "time_taken": 0.19308781623840332
+        },
+        "plagiarism": {
+            "score": 0.0,
+            "time_taken": 0.19272303581237793
+        },
+        "readability": {
+            "flesch_kincaid_grade": 82.1,
+            "gunning_fog_index": 82.17,
+            "readability_score": 0.0,
+            "time_taken": 0.0035572052001953125
+        },
+        "final_score": 0.472,
+        "final_score_percentage": "47.20%",
+        "score_breakdown": {
+            "sentiment": {
+                "raw": 0.004,
+                "weight": 0.25,
+                "weighted": 0.001
+            },
+            "originality": {
+                "raw": 1.0,
+                "weight": 0.25,
+                "weighted": 0.25
+            },
+            "inverted_bias": {
+                "raw": 0.353,
+                "weight": 0.2,
+                "weighted": 0.071
+            },
+            "inverted_plagiarism": {
+                "raw": 1.0,
+                "weight": 0.15,
+                "weighted": 0.15
+            },
+            "readability": {
+                "raw": 0.0,
+                "weight": 0.15,
+                "weighted": 0.0
+            }
+        },
+        "total_time": 3.899998188018799,
+        "token_reward": 544.406,
+        "tx_hash": "6a19b4afb01ae6cb00e54470f53f8450b2732f47395f0d6fa5110a8dddd48d59"
+    }
+}
