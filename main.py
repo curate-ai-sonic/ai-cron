@@ -11,7 +11,7 @@ from typing import Dict, Any, List, Optional
 import requests
 import spacy
 import textstat
-import httpx  # pip install httpx
+import httpx
 
 from web3 import Web3
 
@@ -25,7 +25,7 @@ from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 
-# Ollama (if installed)
+# Ollama (optional for bias detection)
 try:
     import ollama  # type: ignore
 except ImportError:
@@ -52,45 +52,45 @@ API_SAVE_ENDPOINT = "http://localhost:3000/api/ratings/ai"
 API_UPDATE_ENDPOINT = "http://localhost:3000/api/ratings/ai"
 
 # Blockchain configuration
-WEB3_PROVIDER = os.getenv("WEB3_PROVIDER", "http://localhost:8545")
-TOKEN_CONTRACT_ADDRESS = os.getenv("TOKEN_CONTRACT_ADDRESS","0x33b0AA3D65Fda9cB3C80D45fB5b42159623a2759")
+WEB3_PROVIDER = os.getenv("WEB3_PROVIDER", "https://base-sepolia.g.alchemy.com/v2/LYBjzhlxMCEmYvtnrp4uRPBuJ0E7baIT")
+TOKEN_CONTRACT_ADDRESS = os.getenv("TOKEN_CONTRACT_ADDRESS", "0x8262AD6adc5650d8ee0D86622463E7dA976bd102")
+VOTING_CONTRACT_ADDRESS = os.getenv("VOTING_CONTRACT_ADDRESS", "0xBa8d238436B889169692Ffdb993341C36D736277")
 PRIVATE_KEY = os.getenv("PRIVATE_KEY")
 ACCOUNT_ADDRESS = os.getenv("ACCOUNT_ADDRESS")
 
 w3 = Web3(Web3.HTTPProvider(WEB3_PROVIDER))
-if not w3.isConnected():
+if not w3.is_connected():
     logger.error("Web3 is not connected!")
+    raise Exception("Web3 is not connected!")
 
-# Token ABI (replace with your actual ABI)
-tokenAbi = [
-  {
-    "inputs": [
-      {"internalType": "address", "name": "spender", "type": "address"},
-      {"internalType": "uint256", "name": "value", "type": "uint256"}
-    ],
-    "name": "approve",
-    "outputs": [
-      {"internalType": "bool", "name": "", "type": "bool"}
-    ],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {"internalType": "address", "name": "recipient", "type": "address"},
-      {"internalType": "uint256", "name": "amount", "type": "uint256"}
-    ],
-    "name": "distributeTokens",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-]  # Make sure your ABI is complete.
+# Load the CurateAIToken ABI from the abi folder.
+TOKEN_ABI_PATH = os.path.join("abi", "CurateAIToken.json")
+VOTING_CONTRACT_ABI_PATH = os.path.join("abi", "CurateAIVote.json")
+with open(TOKEN_ABI_PATH, "r") as f:
+    token_artifact = json.load(f)
+tokenAbi = token_artifact["abi"]
 
+# Initialize the token contract using the loaded ABI.
 token_contract = w3.eth.contract(
-    address=Web3.toChecksumAddress(TOKEN_CONTRACT_ADDRESS),
+    address=Web3.to_checksum_address(TOKEN_CONTRACT_ADDRESS),
     abi=tokenAbi
 )
+
+# Load the voting contract ABI
+with open(VOTING_CONTRACT_ABI_PATH, "r") as f:
+    voting_artifact = json.load(f)
+votingAbi = voting_artifact["abi"]
+
+# Initialize the voting contract using the loaded ABI.
+voting_contract = w3.eth.contract(
+    address=Web3.to_checksum_address(VOTING_CONTRACT_ADDRESS),
+    abi=votingAbi
+)
+ 
+
+
+
+
 
 ###############################################################################
 #                           ONE-TIME GLOBAL LOAD                               #
@@ -244,10 +244,6 @@ def evaluate_readability(text: str) -> Dict[str, float]:
         "readability_score": round(final_read_score, 3)
     }
 
-###############################################################################
-#                           SCORING COMPOSITE                                  #
-###############################################################################
-
 def compute_final_score(analysis: Dict[str, Any]) -> float:
     sentiment   = float(analysis["sentiment"]["score"])
     originality = float(analysis["originality"]["score"])
@@ -269,7 +265,7 @@ def compute_final_score(analysis: Dict[str, Any]) -> float:
     return round(final, 3)
 
 ###############################################################################
-#                               DYNAMIC ANALYSIS                               #
+#                           SCORING COMPOSITE                                  #
 ###############################################################################
 
 ANALYSIS_FUNCTIONS = {
@@ -388,26 +384,25 @@ async def dynamic_analysis(
 #                    BLOCKCHAIN TOKEN DISBURSEMENT FUNCTION                    #
 ###############################################################################
 
-def disburse_tokens(recipient: str, token_reward: float) -> str:
+def disburse_tokens(postId: float, token_reward: float) -> str:
     """
     Calls the token contract's distributeTokens function.
-    Assumes tokenReward is in tokens (float) and converts to base units (e.g. 18 decimals).
+    Assumes token_reward is in tokens (float) and converts to base units (e.g. 18 decimals).
     Returns the transaction hash.
     """
-    # Assume token has 18 decimals.
-    amount = int(token_reward * (10 ** 18))
-    nonce = w3.eth.getTransactionCount(ACCOUNT_ADDRESS)
-    txn = token_contract.functions.distributeTokens(
-        Web3.toChecksumAddress(recipient), amount
-    ).buildTransaction({
-        "chainId": 1,  # adjust chainId as needed
-        "gas": 200000,
-        "gasPrice": w3.toWei('5', 'gwei'),
-        "nonce": nonce,
-    })
-    signed_txn = w3.eth.account.signTransaction(txn, private_key=PRIVATE_KEY)
-    tx_hash = w3.eth.sendRawTransaction(signed_txn.rawTransaction)
-    return tx_hash.hex()
+    try:
+        # Assume token has 18 decimals.
+        amount = int(token_reward * (10 ** 18))
+        nonce = w3.eth.getTransactionCount(ACCOUNT_ADDRESS)
+        txn = voting_contract.functions.aiVote(
+            postId, amount
+        )
+        signed_txn = w3.eth.account.signTransaction(txn, private_key=PRIVATE_KEY)
+        tx_hash = w3.eth.sendRawTransaction(signed_txn.rawTransaction)
+        return tx_hash.hex()
+    except Exception as e:
+        logger.error(f"Error disbursing tokens for post {postId}: {e}")
+        raise
 
 ###############################################################################
 #                       SAVE/UPDATE ANALYSIS VIA API CALL                     #
@@ -419,13 +414,13 @@ async def save_analysis(analysis_data: Dict[str, Any], post_id: int) -> None:
         "sentimentAnalysisLabel": analysis_data.get("sentiment", {}).get("label", ""),
         "sentimentAnalysisScore": analysis_data.get("sentiment", {}).get("score", 0.0),
         "biasDetectionScore": analysis_data.get("bias", {}).get("score", 0.5),
-        "biasDetectionDirection": "",  # Set as needed.
+        "biasDetectionDirection": "",
         "originalityScore": analysis_data.get("originality", {}).get("score", 1.0),
         "similarityScore": analysis_data.get("originality", {}).get("average_similarity", 0.0),
         "readabilityFleschKincaid": analysis_data.get("readability", {}).get("flesch_kincaid_grade", 0.0),
         "readabilityGunningFog": analysis_data.get("readability", {}).get("gunning_fog_index", 0.0),
-        "mainTopic": "",               # Update as needed.
-        "secondaryTopics": [],         # Update as needed.
+        "mainTopic": "",
+        "secondaryTopics": [],
         "rating": round(analysis_data["final_score"] * 100),
         "finalScore": analysis_data["final_score"],
         "finalScorePercentage": analysis_data["final_score_percentage"],
@@ -513,7 +508,7 @@ async def main():
         # Additionally, call the blockchain to disburse tokens if the author wallet exists.
         if item.get("author_wallet"):
             try:
-                tx_hash = disburse_tokens(item["author_wallet"], item["analysis"]["token_reward"])
+                tx_hash = disburse_tokens(item["id"], item["analysis"]["token_reward"])
                 logger.info(f"Disbursed {item['analysis']['token_reward']} tokens to {item['author_wallet']} in tx {tx_hash}")
             except Exception as bc_error:
                 logger.error(f"Error disbursing tokens for post {item['post_id']}: {bc_error}")
